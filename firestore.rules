@@ -1,0 +1,43 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // User profile and all nested subcollections (notes, folders, tags, settings)
+    // Completely isolated: only the owner can read/write their own data
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      match /{allSubcollections=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // Public Notes: Separate publishing layer
+    // Allows safe read-only public access without exposing private user data
+    match /publicNotes/{publicId} {
+      // Anonymous users can only read explicitly published notes.
+      // Authenticated users can read to observe version and publishing status for synced copies.
+      allow read: if (resource != null && resource.data.isPublished == true)
+                  || (request.auth != null);
+
+      // Only authenticated users can publish notes under their own uid
+      allow create: if request.auth != null 
+                    && request.resource.data.ownerId == request.auth.uid;
+
+      // Creator can update; or public viewers can increment viewsCount / copiesCount
+      allow update: if (request.auth != null && (
+                        (resource != null && resource.data.ownerId == request.auth.uid) ||
+                        request.resource.data.ownerId == request.auth.uid
+                      ))
+                    || (resource != null && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewsCount']))
+                    || (resource != null && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['copiesCount']));
+
+      // Only the owner can delete the public record
+      allow delete: if request.auth != null 
+                    && resource != null
+                    && resource.data.ownerId == request.auth.uid;
+    }
+
+  }
+}
